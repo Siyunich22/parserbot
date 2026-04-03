@@ -128,6 +128,7 @@ class Parser2GIS:
             for probe_url in self._build_probe_urls(
                 search_url=search_url,
                 search_context=search_context,
+                limit=limit,
             ):
                 try:
                     probe_response = self._request("GET", probe_url)
@@ -254,7 +255,12 @@ class Parser2GIS:
 
         return context
 
-    def _build_probe_urls(self, search_url: str, search_context: Dict[str, float]) -> List[str]:
+    def _build_probe_urls(
+        self,
+        search_url: str,
+        search_context: Dict[str, float],
+        limit: int,
+    ) -> List[str]:
         lon1 = search_context.get("lon1")
         lat1 = search_context.get("lat1")
         lon2 = search_context.get("lon2")
@@ -268,36 +274,65 @@ class Parser2GIS:
 
         min_lon, max_lon = sorted((lon1, lon2))
         min_lat, max_lat = sorted((lat1, lat2))
-        detail_zoom = min(max(zoom + 2.0, 12.5), 14.0)
-
-        points = [
-            (center_lon, center_lat),
-            (min_lon + (max_lon - min_lon) * 0.25, min_lat + (max_lat - min_lat) * 0.75),
-            (min_lon + (max_lon - min_lon) * 0.75, min_lat + (max_lat - min_lat) * 0.75),
-            (min_lon + (max_lon - min_lon) * 0.25, min_lat + (max_lat - min_lat) * 0.25),
-            (min_lon + (max_lon - min_lon) * 0.75, min_lat + (max_lat - min_lat) * 0.25),
-        ]
-
-        extra_grid = [0.2, 0.5, 0.8]
-        for x_ratio in extra_grid:
-            for y_ratio in extra_grid:
-                points.append(
-                    (
-                        min_lon + (max_lon - min_lon) * x_ratio,
-                        min_lat + (max_lat - min_lat) * y_ratio,
-                    )
-                )
+        zoom_levels = self._get_probe_zoom_levels(float(zoom), limit)
+        points = self._build_probe_points(
+            min_lon=min_lon,
+            max_lon=max_lon,
+            min_lat=min_lat,
+            max_lat=max_lat,
+            center_lon=float(center_lon),
+            center_lat=float(center_lat),
+            limit=limit,
+        )
 
         probe_urls = []
         seen = set()
-        for lon, lat in points:
-            key = (round(lon, 4), round(lat, 4))
-            if key in seen:
-                continue
-            seen.add(key)
-            probe_urls.append(f"{search_url}?m={lon:.6f},{lat:.6f}/{detail_zoom:.2f}")
+        for detail_zoom in zoom_levels:
+            for lon, lat in points:
+                key = (round(lon, 4), round(lat, 4), round(detail_zoom, 2))
+                if key in seen:
+                    continue
+                seen.add(key)
+                probe_urls.append(f"{search_url}?m={lon:.6f},{lat:.6f}/{detail_zoom:.2f}")
 
         return probe_urls
+
+    def _get_probe_zoom_levels(self, zoom: float, limit: int) -> List[float]:
+        zoom_levels = [min(max(zoom + 2.0, 12.5), 14.0)]
+        if limit > 50:
+            zoom_levels.append(min(max(zoom + 2.8, 13.5), 15.0))
+        return zoom_levels
+
+    def _build_probe_points(
+        self,
+        min_lon: float,
+        max_lon: float,
+        min_lat: float,
+        max_lat: float,
+        center_lon: float,
+        center_lat: float,
+        limit: int,
+    ) -> List[tuple[float, float]]:
+        if limit <= 20:
+            ratios = [0.2, 0.5, 0.8]
+        elif limit <= 50:
+            ratios = [0.0, 0.25, 0.5, 0.75, 1.0]
+        else:
+            ratios = [0.0, 0.25, 0.5, 0.75, 1.0]
+
+        ratio_points = [(x_ratio, y_ratio) for x_ratio in ratios for y_ratio in ratios]
+        ratio_points.sort(key=lambda point: (abs(point[0] - 0.5) + abs(point[1] - 0.5), point[0], point[1]))
+
+        points = [(center_lon, center_lat)]
+        for x_ratio, y_ratio in ratio_points:
+            points.append(
+                (
+                    min_lon + (max_lon - min_lon) * x_ratio,
+                    min_lat + (max_lat - min_lat) * y_ratio,
+                )
+            )
+
+        return points
 
     def _request(self, method: str, url: str, **kwargs) -> requests.Response:
         timeout = kwargs.pop("timeout", API_TIMEOUT)

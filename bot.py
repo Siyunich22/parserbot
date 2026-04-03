@@ -17,6 +17,7 @@ from config import (
     DATABASE_URL_SOURCE,
     DATABASE_URL_SUMMARY,
     DEFAULT_PARSE_LIMIT,
+    KASPI_SUPPORTED_REGIONS,
     REGIONS,
     get_region_name,
     require_telegram_token,
@@ -27,7 +28,9 @@ from logger import setup_logger
 from parser_manager import ParserManager
 
 logger = setup_logger("bot")
-LIMIT_OPTIONS = tuple(dict.fromkeys(value for value in (DEFAULT_PARSE_LIMIT, 30, 50, 100) if value > 0))
+LIMIT_OPTIONS = tuple(
+    dict.fromkeys(value for value in (DEFAULT_PARSE_LIMIT, 30, 50, 100, 200) if value > 0)
+)
 
 
 class ParserBot:
@@ -159,9 +162,10 @@ class ParserBot:
         if update.callback_query:
             await update.callback_query.answer()
 
+        source = context.user_data.get("source", "both")
         keyboard_rows = []
         row = []
-        for region_key, region_name in REGIONS.items():
+        for region_key, region_name in self._get_available_regions(source):
             row.append(InlineKeyboardButton(region_name, callback_data=f"region_{region_key}"))
             if len(row) == 2:
                 keyboard_rows.append(row)
@@ -251,17 +255,29 @@ class ParserBot:
         region_name = get_region_name(region)
         limit = self._get_selected_limit(context)
 
+        if source in {"kaspi", "both"} and region not in KASPI_SUPPORTED_REGIONS:
+            context.user_data["mode"] = None
+            await update.message.reply_text(
+                "Для Kaspi выберите город Казахстана. Нажмите /start и выберите Алматы, Астану, Караганду, Актобе или Шымкент."
+            )
+            return
+
+        status_hint = ""
+        if source in {"2gis", "both"}:
+            if limit >= 100:
+                status_hint = "\n\nℹ️ 2ГИС на лимитах 100+ может отвечать 2-3 минуты."
+            elif limit >= 50:
+                status_hint = "\n\nℹ️ 2ГИС на лимитах 50+ может отвечать 1-2 минуты."
+            else:
+                status_hint = "\n\nℹ️ 2ГИС на холодном кэше может отвечать 20-60 секунд."
+
         status_message = await update.message.reply_text(
             f"⏳ Ищу данные...\n"
             f"Запрос: {text}\n"
             f"Источник: {self._format_source(source)}\n"
             f"Город: {region_name}\n"
             f"Лимит: {limit}"
-            + (
-                "\n\nℹ️ 2ГИС на холодном кэше может отвечать 20-40 секунд."
-                if source in {"2gis", "both"}
-                else ""
-            )
+            f"{status_hint}"
         )
         try:
             parse_result = await asyncio.to_thread(
@@ -562,6 +578,13 @@ class ParserBot:
         for key in ("source", "region", "limit"):
             context.user_data.pop(key, None)
         context.user_data["mode"] = None
+
+    def _get_available_regions(self, source: str) -> list[tuple[str, str]]:
+        if source in {"kaspi", "both"}:
+            region_keys = KASPI_SUPPORTED_REGIONS
+        else:
+            region_keys = tuple(REGIONS.keys())
+        return [(region_key, REGIONS[region_key]) for region_key in region_keys if region_key in REGIONS]
 
     def _format_source(self, source: str) -> str:
         labels = {

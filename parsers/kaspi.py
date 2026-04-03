@@ -91,9 +91,11 @@ class ParserKaspi:
 
         city_id = str(city_info["id"])
         city_name = city_info["name"] or get_region_name(city or "almaty")
-        max_pages = max(1, min(5, (limit // 12) + 2))
+        max_pages = max(2, min(8, (limit // 10) + 2))
+        offers_per_product = 3 if limit <= 30 else 5
 
         merchants: Dict[str, Dict] = {}
+        empty_pages = 0
 
         for page in range(max_pages):
             products = self._fetch_products(query, page)
@@ -106,7 +108,7 @@ class ParserKaspi:
                 offers = self._fetch_offers(product, city_id)
 
                 if offers:
-                    for offer in offers[:3]:
+                    for offer in offers[:offers_per_product]:
                         result = self._build_result_from_offer(
                             product=product,
                             offer=offer,
@@ -144,7 +146,12 @@ class ParserKaspi:
                 if len(merchants) >= limit:
                     break
 
-            if len(merchants) >= limit or new_merchants_on_page == 0:
+            if new_merchants_on_page == 0:
+                empty_pages += 1
+            else:
+                empty_pages = 0
+
+            if len(merchants) >= limit or empty_pages >= 2:
                 break
 
         return list(merchants.values())[:limit]

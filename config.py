@@ -170,6 +170,13 @@ CATEGORIES = {
 }
 
 
+KASPI_SUPPORTED_REGIONS = tuple(
+    key
+    for key in ("almaty", "nur_sultan", "karaganda", "aktobe", "shymkent")
+    if key in REGIONS
+)
+
+
 def require_telegram_token() -> str:
     """Вернуть токен Telegram или выбросить понятную ошибку."""
     if not TELEGRAM_BOT_TOKEN:
