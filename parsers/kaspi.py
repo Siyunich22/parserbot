@@ -1,4 +1,5 @@
 import hashlib
+import json
 from typing import Dict, List, Optional
 from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlparse, urlunparse
 
@@ -51,6 +52,7 @@ class ParserKaspi:
         self.offers_url = KASPI_OFFERS_URL
         self.cities_url = KASPI_CITIES_URL
         self._cities_by_code: Optional[Dict[str, Dict]] = None
+        self._merchant_profile_cache: Dict[str, Dict[str, Optional[str]]] = {}
 
     def search(self, query: str, city: str = "", category: str = "", limit: int = 50) -> List[Dict]:
         """Поиск продавцов в Kaspi Магазине."""
@@ -120,6 +122,11 @@ class ParserKaspi:
                         )
                         if not result:
                             continue
+                        self._enrich_result_with_merchant_profile(
+                            result=result,
+                            merchant_identifier=offer.get("merchantId") or offer.get("merchantName"),
+                            product_code=product.get("id"),
+                        )
 
                         key = result["source_id"]
                         if key in merchants:
@@ -138,6 +145,11 @@ class ParserKaspi:
                         requested_category=category,
                     )
                     if result:
+                        self._enrich_result_with_merchant_profile(
+                            result=result,
+                            merchant_identifier=product.get("bestMerchant"),
+                            product_code=product.get("id"),
+                        )
                         key = result["source_id"]
                         if key in merchants:
                             self._merge_result(merchants[key], result)
@@ -389,6 +401,100 @@ class ParserKaspi:
             "category": self._extract_category(product, requested_category),
         }
 
+    def _enrich_result_with_merchant_profile(
+        self,
+        result: Dict,
+        merchant_identifier,
+        product_code,
+    ) -> None:
+        if not merchant_identifier:
+            return
+
+        merchant_profile = self._fetch_merchant_profile(
+            merchant_identifier=str(merchant_identifier),
+            product_code=str(product_code) if product_code else None,
+        )
+        if not merchant_profile:
+            return
+
+        if merchant_profile.get("phone") and not result.get("phone"):
+            result["phone"] = merchant_profile["phone"]
+        if merchant_profile.get("source_url"):
+            result["source_url"] = merchant_profile["source_url"]
+
+    def _fetch_merchant_profile(
+        self,
+        merchant_identifier: str,
+        product_code: Optional[str] = None,
+    ) -> Dict[str, Optional[str]]:
+        cache_key = str(merchant_identifier)
+        cached = self._merchant_profile_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        candidate_urls = [self._build_merchant_url(merchant_identifier, product_code)]
+        fallback_url = self._build_merchant_url(merchant_identifier, None)
+        if fallback_url not in candidate_urls:
+            candidate_urls.append(fallback_url)
+
+        merchant_profile: Dict[str, Optional[str]] = {}
+        for merchant_url in candidate_urls:
+            try:
+                response = self._request(
+                    "GET",
+                    merchant_url,
+                    headers={"Referer": f"{KASPI_BASE_URL}/shop/search/"},
+                )
+                merchant_profile = self._extract_merchant_profile(response.text)
+                if merchant_profile:
+                    merchant_profile["source_url"] = merchant_url
+                    break
+            except requests.RequestException as exc:
+                logger.warning(
+                    "[KASPI] Merchant profile request failed: merchant=%s url=%s error=%s",
+                    merchant_identifier,
+                    merchant_url,
+                    exc,
+                )
+
+        self._merchant_profile_cache[cache_key] = merchant_profile
+        return merchant_profile
+
+    def _build_merchant_url(
+        self,
+        merchant_identifier: str,
+        product_code: Optional[str] = None,
+    ) -> str:
+        merchant_id = str(merchant_identifier)
+        merchant_path = quote(merchant_id, safe="")
+        query = {"merchantId": merchant_id}
+        if product_code:
+            query["productCode"] = str(product_code)
+            query["tabId"] = "PRODUCT"
+        return f"{self.base_url}/shop/info/merchant/{merchant_path}/address-tab/?{urlencode(query)}"
+
+    def _extract_merchant_profile(self, html: str) -> Dict[str, Optional[str]]:
+        marker = "BACKEND.components.merchant = "
+        start = html.find(marker)
+        if start == -1:
+            return {}
+
+        payload = html[start + len(marker):]
+        try:
+            merchant_data, _ = json.JSONDecoder().raw_decode(payload)
+        except json.JSONDecodeError as exc:
+            logger.warning("[KASPI] Failed to decode merchant profile payload: %s", exc)
+            return {}
+
+        if not isinstance(merchant_data, dict):
+            return {}
+
+        return {
+            "merchant_id": str(merchant_data.get("uid") or ""),
+            "name": merchant_data.get("name"),
+            "phone": merchant_data.get("phone"),
+        }
+
     def _extract_category(self, product: Dict, requested_category: str) -> Optional[str]:
         if requested_category:
             return requested_category
@@ -416,6 +522,9 @@ class ParserKaspi:
         incoming_rating = incoming.get("rating")
         if incoming_rating and (not current_rating or incoming_rating > current_rating):
             current["rating"] = incoming_rating
+
+        if not current.get("phone") and incoming.get("phone"):
+            current["phone"] = incoming["phone"]
 
         if not current.get("description") and incoming.get("description"):
             current["description"] = incoming["description"]

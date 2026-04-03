@@ -58,6 +58,30 @@ class ParserKaspiTestCase(unittest.TestCase):
             self.assertIsNone(parser._resolve_city("moscow"))
             self.assertEqual(parser._resolve_city("nur_sultan")["code"], "nur-sultan")
 
+    def test_extract_merchant_profile_reads_phone_from_backend_payload(self):
+        parser = ParserKaspi()
+        html = (
+            '<script>BACKEND.components.merchant = '
+            '{"uid":"Sulpak","name":"Sulpak","phone":"+7 (707) 700-32-10"};'
+            "</script>"
+        )
+
+        profile = parser._extract_merchant_profile(html)
+
+        self.assertEqual(profile["merchant_id"], "Sulpak")
+        self.assertEqual(profile["name"], "Sulpak")
+        self.assertEqual(profile["phone"], "+7 (707) 700-32-10")
+
+    def test_build_merchant_url_includes_merchant_and_product(self):
+        parser = ParserKaspi()
+
+        url = parser._build_merchant_url("Sulpak", product_code="107451877")
+
+        self.assertIn("/shop/info/merchant/Sulpak/address-tab/", url)
+        self.assertIn("merchantId=Sulpak", url)
+        self.assertIn("productCode=107451877", url)
+        self.assertIn("tabId=PRODUCT", url)
+
 
 if __name__ == "__main__":
     unittest.main()
