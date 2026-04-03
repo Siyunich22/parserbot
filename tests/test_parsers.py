@@ -25,6 +25,24 @@ class Parser2GISTestCase(unittest.TestCase):
         self.assertGreater(len(medium), len(small))
         self.assertGreater(len(large), len(medium))
 
+    def test_extract_search_context_parses_drag_bounds(self):
+        parser = Parser2GIS()
+        html = (
+            '"viewpoint":[{"lon":76.7,"lat":43.3},{"lon":77.0,"lat":43.1}],'
+            '"center":{"lon":76.85,"lat":43.2},"zoom":11.6,'
+            '"drag_bound":[{"latitude":43.54,"longitude":76.44},'
+            '{"latitude":42.89,"longitude":76.44},'
+            '{"latitude":42.89,"longitude":77.33},'
+            '{"latitude":43.54,"longitude":77.33}],"external_source":0'
+        )
+
+        context = parser._extract_search_context(html)
+
+        self.assertEqual(context["drag_min_lon"], 76.44)
+        self.assertEqual(context["drag_max_lon"], 77.33)
+        self.assertEqual(context["drag_min_lat"], 42.89)
+        self.assertEqual(context["drag_max_lat"], 43.54)
+
 
 class ParserKaspiTestCase(unittest.TestCase):
     def test_resolve_city_returns_none_for_unsupported_region(self):

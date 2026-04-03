@@ -123,7 +123,7 @@ DEFAULT_PARSE_LIMIT = int(os.getenv("DEFAULT_PARSE_LIMIT", "15"))
 # Кэш
 CACHE_DIR = Path(os.getenv("CACHE_DIR", str(DATA_DIR / "cache")))
 CACHE_TTL_HOURS = int(os.getenv("CACHE_TTL_HOURS", "24"))
-CACHE_SCHEMA_VERSION = os.getenv("CACHE_SCHEMA_VERSION", "4").strip() or "4"
+CACHE_SCHEMA_VERSION = os.getenv("CACHE_SCHEMA_VERSION", "5").strip() or "5"
 
 # Режимы разработки
 ENABLE_DEMO_FALLBACK = os.getenv("ENABLE_DEMO_FALLBACK", "false").strip().lower() in {

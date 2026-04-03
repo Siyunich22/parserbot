@@ -253,6 +253,20 @@ class Parser2GIS:
             context["center_lat"] = float(center_match.group(2))
             context["zoom"] = float(center_match.group(3))
 
+        drag_bound_match = re.search(r'"drag_bound":\[(.*?)\],"external_source"', html)
+        if drag_bound_match:
+            coordinates = re.findall(
+                r'"latitude":([-\d.]+),"longitude":([-\d.]+)',
+                drag_bound_match.group(1),
+            )
+            if coordinates:
+                latitudes = [float(latitude) for latitude, _ in coordinates]
+                longitudes = [float(longitude) for _, longitude in coordinates]
+                context["drag_min_lon"] = min(longitudes)
+                context["drag_max_lon"] = max(longitudes)
+                context["drag_min_lat"] = min(latitudes)
+                context["drag_max_lat"] = max(latitudes)
+
         return context
 
     def _build_probe_urls(
@@ -261,43 +275,94 @@ class Parser2GIS:
         search_context: Dict[str, float],
         limit: int,
     ) -> List[str]:
-        lon1 = search_context.get("lon1")
-        lat1 = search_context.get("lat1")
-        lon2 = search_context.get("lon2")
-        lat2 = search_context.get("lat2")
+        primary_bounds = self._get_primary_bounds(search_context)
         center_lon = search_context.get("center_lon")
         center_lat = search_context.get("center_lat")
         zoom = search_context.get("zoom")
 
-        if None in {lon1, lat1, lon2, lat2, center_lon, center_lat, zoom}:
+        if None in {*primary_bounds, center_lon, center_lat, zoom}:
             return []
 
-        min_lon, max_lon = sorted((lon1, lon2))
-        min_lat, max_lat = sorted((lat1, lat2))
-        zoom_levels = self._get_probe_zoom_levels(float(zoom), limit)
-        points = self._build_probe_points(
-            min_lon=min_lon,
-            max_lon=max_lon,
-            min_lat=min_lat,
-            max_lat=max_lat,
-            center_lon=float(center_lon),
-            center_lat=float(center_lat),
-            limit=limit,
-        )
+        zoom_levels = self._get_probe_zoom_levels(float(zoom), limit, coverage="view")
+        point_sets = [
+            (
+                "view",
+                self._build_probe_points(
+                    min_lon=primary_bounds[0],
+                    max_lon=primary_bounds[1],
+                    min_lat=primary_bounds[2],
+                    max_lat=primary_bounds[3],
+                    center_lon=float(center_lon),
+                    center_lat=float(center_lat),
+                    limit=limit,
+                    coverage="view",
+                ),
+            )
+        ]
+
+        drag_bounds = self._get_drag_bounds(search_context)
+        if drag_bounds and limit > 20:
+            drag_center_lon = (drag_bounds[0] + drag_bounds[1]) / 2
+            drag_center_lat = (drag_bounds[2] + drag_bounds[3]) / 2
+            point_sets.append(
+                (
+                    "drag",
+                    self._build_probe_points(
+                        min_lon=drag_bounds[0],
+                        max_lon=drag_bounds[1],
+                        min_lat=drag_bounds[2],
+                        max_lat=drag_bounds[3],
+                        center_lon=drag_center_lon,
+                        center_lat=drag_center_lat,
+                        limit=limit,
+                        coverage="drag",
+                    ),
+                )
+            )
 
         probe_urls = []
         seen = set()
-        for detail_zoom in zoom_levels:
-            for lon, lat in points:
-                key = (round(lon, 4), round(lat, 4), round(detail_zoom, 2))
-                if key in seen:
-                    continue
-                seen.add(key)
-                probe_urls.append(f"{search_url}?m={lon:.6f},{lat:.6f}/{detail_zoom:.2f}")
+        for coverage, points in point_sets:
+            coverage_zoom_levels = self._get_probe_zoom_levels(float(zoom), limit, coverage=coverage)
+            for detail_zoom in coverage_zoom_levels:
+                for lon, lat in points:
+                    key = (coverage, round(lon, 4), round(lat, 4), round(detail_zoom, 2))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    probe_urls.append(f"{search_url}?m={lon:.6f},{lat:.6f}/{detail_zoom:.2f}")
 
         return probe_urls
 
-    def _get_probe_zoom_levels(self, zoom: float, limit: int) -> List[float]:
+    def _get_primary_bounds(self, search_context: Dict[str, float]) -> tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
+        lon1 = search_context.get("lon1")
+        lat1 = search_context.get("lat1")
+        lon2 = search_context.get("lon2")
+        lat2 = search_context.get("lat2")
+        if None in {lon1, lat1, lon2, lat2}:
+            return None, None, None, None
+        min_lon, max_lon = sorted((float(lon1), float(lon2)))
+        min_lat, max_lat = sorted((float(lat1), float(lat2)))
+        return min_lon, max_lon, min_lat, max_lat
+
+    def _get_drag_bounds(self, search_context: Dict[str, float]) -> Optional[tuple[float, float, float, float]]:
+        keys = ("drag_min_lon", "drag_max_lon", "drag_min_lat", "drag_max_lat")
+        if any(search_context.get(key) is None for key in keys):
+            return None
+        return (
+            float(search_context["drag_min_lon"]),
+            float(search_context["drag_max_lon"]),
+            float(search_context["drag_min_lat"]),
+            float(search_context["drag_max_lat"]),
+        )
+
+    def _get_probe_zoom_levels(self, zoom: float, limit: int, coverage: str) -> List[float]:
+        if coverage == "drag":
+            zoom_levels = [min(max(zoom + 1.4, 12.2), 13.2)]
+            if limit > 80:
+                zoom_levels.append(min(max(zoom + 2.0, 12.8), 13.8))
+            return zoom_levels
+
         zoom_levels = [min(max(zoom + 2.0, 12.5), 14.0)]
         if limit > 50:
             zoom_levels.append(min(max(zoom + 2.8, 13.5), 15.0))
@@ -312,7 +377,26 @@ class Parser2GIS:
         center_lon: float,
         center_lat: float,
         limit: int,
+        coverage: str,
     ) -> List[tuple[float, float]]:
+        if coverage == "drag":
+            grid_size = 4 if limit <= 50 else 5
+            ratios = [index / (grid_size - 1) for index in range(grid_size)]
+            ratio_points = [(x_ratio, y_ratio) for x_ratio in ratios for y_ratio in ratios]
+            ratio_points.sort(
+                key=lambda point: (abs(point[0] - 0.5) + abs(point[1] - 0.5), point[0], point[1])
+            )
+
+            points = [(center_lon, center_lat)]
+            for x_ratio, y_ratio in ratio_points:
+                points.append(
+                    (
+                        min_lon + (max_lon - min_lon) * x_ratio,
+                        min_lat + (max_lat - min_lat) * y_ratio,
+                    )
+                )
+            return points
+
         if limit <= 20:
             ratios = [0.2, 0.5, 0.8]
         elif limit <= 50:

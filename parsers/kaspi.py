@@ -99,10 +99,12 @@ class ParserKaspi:
 
         for page in range(max_pages):
             products = self._fetch_products(query, page)
+            logger.info("[KASPI] Products page=%s query='%s': %s items", page, query, len(products))
             if not products:
                 break
 
             new_merchants_on_page = 0
+            empty_offers_on_page = 0
 
             for product in products:
                 offers = self._fetch_offers(product, city_id)
@@ -145,11 +147,22 @@ class ParserKaspi:
 
                 if len(merchants) >= limit:
                     break
+                if not offers:
+                    empty_offers_on_page += 1
 
             if new_merchants_on_page == 0:
                 empty_pages += 1
             else:
                 empty_pages = 0
+
+            logger.info(
+                "[KASPI] Page summary query='%s' page=%s merchants=%s new=%s empty_offers=%s",
+                query,
+                page,
+                len(merchants),
+                new_merchants_on_page,
+                empty_offers_on_page,
+            )
 
             if len(merchants) >= limit or empty_pages >= 2:
                 break
@@ -191,12 +204,35 @@ class ParserKaspi:
         return self._cities_by_code
 
     def _fetch_products(self, query: str, page: int) -> List[Dict]:
+        headers = {"Referer": f"{KASPI_BASE_URL}/shop/search/?text={quote(query)}"}
         payload = self._request_json(
             "GET",
             self.products_url,
             params={"text": query, "page": page},
-            headers={"Referer": f"{KASPI_BASE_URL}/shop/search/?text={quote(query)}"},
+            headers=headers,
         )
+        products = self._extract_products(payload)
+        if products or page > 0:
+            return products
+
+        retry_headers = {
+            "Referer": f"{KASPI_BASE_URL}/shop/search/?text={quote(query)}",
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Dest": "empty",
+        }
+        retry_payload = self._request_json(
+            "GET",
+            self.products_url,
+            params={"text": " ".join(query.split()), "page": page},
+            headers=retry_headers,
+        )
+        retry_products = self._extract_products(retry_payload)
+        if retry_products:
+            logger.info("[KASPI] Product search recovered on retry for query='%s'", query)
+        return retry_products
+
+    def _extract_products(self, payload) -> List[Dict]:
         if isinstance(payload, dict):
             data = payload.get("data", [])
             return data if isinstance(data, list) else []
