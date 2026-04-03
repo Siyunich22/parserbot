@@ -1,7 +1,12 @@
 import unittest
 from unittest import mock
 
-from config import build_database_url_from_pg_env, normalize_database_url, resolve_database_url
+from config import (
+    build_database_url_from_pg_env,
+    detect_database_url_source,
+    normalize_database_url,
+    resolve_database_url,
+)
 
 
 class ConfigTestCase(unittest.TestCase):
@@ -64,6 +69,24 @@ class ConfigTestCase(unittest.TestCase):
             self.assertEqual(
                 resolve_database_url("sqlite:///fallback.db"),
                 "postgresql+psycopg://postgres:secret@junction.proxy.rlwy.net:5432/railway?sslmode=require",
+            )
+
+    def test_detect_database_url_source_prefers_pg_env_when_database_url_invalid(self):
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "DATABASE_URL": "junction.proxy.rlwy.net",
+                "PGHOST": "junction.proxy.rlwy.net",
+                "PGPORT": "5432",
+                "PGUSER": "postgres",
+                "PGPASSWORD": "secret",
+                "PGDATABASE": "railway",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                detect_database_url_source("sqlite:///fallback.db"),
+                "PG_ENV",
             )
 
 

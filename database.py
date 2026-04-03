@@ -12,7 +12,18 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import UTC, datetime
-from config import DATABASE_URL
+from config import DATABASE_URL, DATABASE_URL_SOURCE, DATABASE_URL_SUMMARY
+
+print(
+    "[database] source={source} scheme={scheme} host={host} port={port} database={database} sslmode={sslmode}".format(
+        source=DATABASE_URL_SOURCE,
+        scheme=DATABASE_URL_SUMMARY.get("scheme", ""),
+        host=DATABASE_URL_SUMMARY.get("host", ""),
+        port=DATABASE_URL_SUMMARY.get("port", ""),
+        database=DATABASE_URL_SUMMARY.get("database", ""),
+        sslmode=DATABASE_URL_SUMMARY.get("sslmode", ""),
+    )
+)
 
 # Создаём базу данных
 engine_kwargs = {}

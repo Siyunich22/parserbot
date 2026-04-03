@@ -13,7 +13,14 @@ from telegram.ext import (
     filters,
 )
 
-from config import DEFAULT_PARSE_LIMIT, REGIONS, get_region_name, require_telegram_token
+from config import (
+    DATABASE_URL_SOURCE,
+    DATABASE_URL_SUMMARY,
+    DEFAULT_PARSE_LIMIT,
+    REGIONS,
+    get_region_name,
+    require_telegram_token,
+)
 from database import Export, ParseSession, SessionLocal
 from export import ExportManager
 from logger import setup_logger
@@ -569,6 +576,15 @@ def main():
     """Запуск бота."""
     token = require_telegram_token()
     logger.info("Bot starting...")
+    logger.info(
+        "Database runtime: source=%s scheme=%s host=%s port=%s database=%s sslmode=%s",
+        DATABASE_URL_SOURCE,
+        DATABASE_URL_SUMMARY.get("scheme", ""),
+        DATABASE_URL_SUMMARY.get("host", ""),
+        DATABASE_URL_SUMMARY.get("port", ""),
+        DATABASE_URL_SUMMARY.get("database", ""),
+        DATABASE_URL_SUMMARY.get("sslmode", ""),
+    )
 
     app = Application.builder().token(token).build()
     bot = ParserBot()

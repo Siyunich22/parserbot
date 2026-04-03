@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from urllib.parse import quote_plus
+from urllib.parse import parse_qs, quote_plus, urlparse
 
 try:
     from dotenv import load_dotenv
@@ -64,6 +64,36 @@ def resolve_database_url(default_sqlite_url: str) -> str:
     return normalize_database_url(default_sqlite_url)
 
 
+def detect_database_url_source(default_sqlite_url: str) -> str:
+    """Определить источник итоговой строки подключения."""
+    raw_database_url = os.getenv("DATABASE_URL", "").strip()
+    normalized = normalize_database_url(raw_database_url)
+    if normalized and "://" in normalized:
+        return "DATABASE_URL"
+    if build_database_url_from_pg_env():
+        return "PG_ENV"
+    return "DEFAULT_SQLITE"
+
+
+def summarize_database_url(database_url: str) -> dict:
+    """Вернуть безопасную сводку по строке подключения без секретов."""
+    parsed = urlparse(database_url)
+    query = parse_qs(parsed.query)
+    database = parsed.path.lstrip("/") if parsed.path else ""
+    summary = {
+        "scheme": parsed.scheme or "",
+        "host": parsed.hostname or "",
+        "port": str(parsed.port or ""),
+        "database": database,
+        "sslmode": (query.get("sslmode") or [""])[0],
+    }
+
+    if database_url.startswith("sqlite"):
+        summary["database"] = database or database_url.rsplit("/", 1)[-1]
+
+    return summary
+
+
 # Базовые настройки
 PROJECT_ROOT = Path(__file__).resolve().parent
 DATA_DIR = Path(os.getenv("DATA_DIR", str(PROJECT_ROOT / "data")))
@@ -77,7 +107,10 @@ EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 
 # База данных
-DATABASE_URL = resolve_database_url(f"sqlite:///{PROJECT_ROOT / 'parser_data.db'}")
+DEFAULT_SQLITE_DATABASE_URL = f"sqlite:///{PROJECT_ROOT / 'parser_data.db'}"
+DATABASE_URL_SOURCE = detect_database_url_source(DEFAULT_SQLITE_DATABASE_URL)
+DATABASE_URL = resolve_database_url(DEFAULT_SQLITE_DATABASE_URL)
+DATABASE_URL_SUMMARY = summarize_database_url(DATABASE_URL)
 
 # Логирование
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
