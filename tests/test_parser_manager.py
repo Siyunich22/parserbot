@@ -153,6 +153,70 @@ class ParserManagerTestCase(unittest.TestCase):
         self.assertEqual(latest.results_count, len(results))
         self.assertGreater(len(results), 0)
 
+    def test_parse_marks_session_failed_after_save_error(self):
+        with mock.patch.object(
+            self.manager.parser_2gis,
+            "search",
+            return_value=self.sample_2gis_results(),
+        ), mock.patch.object(
+            self.manager,
+            "_save_results",
+            side_effect=RuntimeError("flush failed"),
+        ):
+            parse_session = self.manager.parse(
+                db=self.db,
+                query="кафе",
+                source="2gis",
+                city="almaty",
+                user_id=77,
+                limit=5,
+            )
+
+        self.assertEqual(parse_session.status, "failed")
+        self.assertIn("RuntimeError: flush failed", parse_session.error_message)
+
+    def test_parse_truncates_long_fields_to_schema_safe_lengths(self):
+        oversized_result = {
+            "name": "N" * 400,
+            "phone": "+77000000000 | WhatsApp: +77777777777",
+            "email": "longmail@example.com",
+            "website": "https://example.com/" + ("a" * 400),
+            "address": "A" * 700,
+            "city": "Алматы",
+            "rating": 4.8,
+            "source_id": "kaspi_" + ("x" * 200),
+            "source": "kaspi",
+            "source_url": "https://kaspi.kz/" + ("b" * 700),
+            "description": "Описание",
+            "category": "Категория" * 30,
+        }
+
+        with mock.patch.object(
+            self.manager.parser_kaspi,
+            "search",
+            return_value=[oversized_result],
+        ):
+            parse_session = self.manager.parse(
+                db=self.db,
+                query="электроника",
+                source="kaspi",
+                city="almaty",
+                user_id=501,
+                limit=5,
+            )
+
+        results = self.manager.get_session_results(self.db, parse_session.id)
+        self.assertEqual(parse_session.status, "completed")
+        self.assertEqual(len(results), 1)
+        company = results[0]
+        self.assertLessEqual(len(company.name), 255)
+        self.assertLessEqual(len(company.phone or ""), 20)
+        self.assertLessEqual(len(company.website or ""), 255)
+        self.assertLessEqual(len(company.address or ""), 500)
+        self.assertLessEqual(len(company.category or ""), 100)
+        self.assertLessEqual(len(company.source_url or ""), 500)
+        self.assertLessEqual(len(company.source_id or ""), 100)
+
 
 if __name__ == "__main__":
     unittest.main()

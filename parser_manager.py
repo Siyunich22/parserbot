@@ -1,7 +1,9 @@
+import hashlib
 from typing import List, Dict, Optional
 from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 
 from config import get_region_name
 from database import Company, ParseSession, ParseResult
@@ -88,6 +90,9 @@ class ParserManager:
             parse_session.results_count = total_results
             parse_session.completed_at = utcnow()
 
+            db.commit()
+            db.refresh(parse_session)
+
             logger.info(
                 "Парсинг завершён: %s - найдено %s результатов (session_id=%s)",
                 query,
@@ -97,11 +102,22 @@ class ParserManager:
 
         except Exception as e:
             logger.error("Ошибка при парсинге: %s", e, exc_info=True)
-            parse_session.status = "failed"
-            parse_session.error_message = str(e)
+            db.rollback()
 
-        db.commit()
-        db.refresh(parse_session)
+            failed_session = db.query(ParseSession).filter(
+                ParseSession.id == parse_session.id
+            ).first()
+            if failed_session:
+                failed_session.status = "failed"
+                failed_session.error_message = f"{type(e).__name__}: {e}"
+                failed_session.completed_at = utcnow()
+                db.commit()
+                db.refresh(failed_session)
+                logger.info("Сессия %s обновлена в БД со статусом failed", failed_session.id)
+                return failed_session
+
+            raise
+
         logger.info("Сессия %s обновлена в БД", parse_session.id)
         return parse_session
 
@@ -122,50 +138,99 @@ class ParserManager:
                 continue
 
             seen_source_ids.add(source_id)
-            company = db.query(Company).filter(Company.source_id == source_id).first()
+            added_link = False
+            payload = self._prepare_company_payload(item, source)
 
-            if not company:
-                company = Company(
-                    name=item.get("name", ""),
-                    phone=item.get("phone"),
-                    email=item.get("email"),
-                    website=item.get("website"),
-                    address=item.get("address"),
-                    city=item.get("city"),
-                    category=item.get("category"),
-                    source=source,
-                    rating=item.get("rating"),
-                    source_url=item.get("source_url"),
-                    source_id=source_id,
-                    description=item.get("description"),
+            try:
+                with db.begin_nested():
+                    company = db.query(Company).filter(Company.source_id == payload["source_id"]).first()
+
+                    if not company:
+                        company = Company(**payload)
+                        db.add(company)
+                    else:
+                        company.name = payload["name"] or company.name
+                        company.phone = payload["phone"] or company.phone
+                        company.email = payload["email"] or company.email
+                        company.website = payload["website"] or company.website
+                        company.address = payload["address"] or company.address
+                        company.city = payload["city"] or company.city
+                        company.category = payload["category"] or company.category
+                        company.rating = payload["rating"] or company.rating
+                        company.source_url = payload["source_url"] or company.source_url
+                        company.description = payload["description"] or company.description
+                        company.last_updated = utcnow()
+
+                    db.flush()
+
+                    link_exists = db.query(ParseResult).filter(
+                        ParseResult.parse_session_id == parse_session_id,
+                        ParseResult.company_id == company.id,
+                    ).first()
+                    if not link_exists:
+                        db.add(ParseResult(parse_session_id=parse_session_id, company_id=company.id))
+                        db.flush()
+                        added_link = True
+            except SQLAlchemyError as exc:
+                logger.warning(
+                    "Пропускаем запись source=%s session=%s source_id=%s: %s",
+                    source,
+                    parse_session_id,
+                    payload["source_id"],
+                    exc,
+                    exc_info=True,
                 )
-                db.add(company)
-            else:
-                company.name = item.get("name") or company.name
-                company.phone = item.get("phone") or company.phone
-                company.email = item.get("email") or company.email
-                company.website = item.get("website") or company.website
-                company.address = item.get("address") or company.address
-                company.city = item.get("city") or company.city
-                company.category = item.get("category") or company.category
-                company.rating = item.get("rating") or company.rating
-                company.source_url = item.get("source_url") or company.source_url
-                company.description = item.get("description") or company.description
-                company.last_updated = utcnow()
+                continue
 
-            db.flush()
-
-            link_exists = db.query(ParseResult).filter(
-                ParseResult.parse_session_id == parse_session_id,
-                ParseResult.company_id == company.id,
-            ).first()
-            if not link_exists:
-                db.add(ParseResult(parse_session_id=parse_session_id, company_id=company.id))
+            if added_link:
                 linked_count += 1
 
         db.commit()
         logger.info("К сессии %s привязано %s записей из %s", parse_session_id, linked_count, source)
         return linked_count
+
+    def _prepare_company_payload(self, item: Dict, source: str) -> Dict:
+        """Нормализовать и ограничить поля под текущую схему БД."""
+        return {
+            "name": self._fit_string(item.get("name"), 255, fallback="Без названия"),
+            "phone": self._fit_contact(item.get("phone"), 20),
+            "email": self._fit_contact(item.get("email"), 255),
+            "website": self._fit_contact(item.get("website"), 255),
+            "address": self._fit_string(item.get("address"), 500),
+            "city": self._fit_string(item.get("city"), 100),
+            "category": self._fit_string(item.get("category"), 100),
+            "source": self._fit_string(source, 50),
+            "rating": item.get("rating"),
+            "source_url": self._fit_string(item.get("source_url"), 500),
+            "source_id": self._fit_source_id(item.get("source_id"), 100),
+            "description": item.get("description"),
+        }
+
+    def _fit_contact(self, value, max_length: int) -> Optional[str]:
+        """Сохранить только первый контакт, чтобы не ломать текущую схему."""
+        if value is None:
+            return None
+        parts = [part.strip() for part in str(value).split("|") if part.strip()]
+        primary = parts[0] if parts else str(value).strip()
+        return self._fit_string(primary, max_length)
+
+    def _fit_string(self, value, max_length: int, fallback: Optional[str] = None) -> Optional[str]:
+        """Обрезать строку под ограничение столбца."""
+        if value is None:
+            return fallback
+        text = str(value).strip()
+        if not text:
+            return fallback
+        return text[:max_length]
+
+    def _fit_source_id(self, value, max_length: int) -> str:
+        """Стабильно укоротить source_id без потери уникальности."""
+        text = self._fit_string(value, 2048, fallback="unknown-source") or "unknown-source"
+        if len(text) <= max_length:
+            return text
+        digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
+        prefix = text[: max_length - len(digest) - 1]
+        return f"{prefix}-{digest}"
 
     def get_latest_session(self, db: Session, user_id: int) -> Optional[ParseSession]:
         """Получить последнюю завершённую сессию пользователя."""
