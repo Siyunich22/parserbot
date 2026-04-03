@@ -17,6 +17,7 @@ from config import (
     DATABASE_URL_SOURCE,
     DATABASE_URL_SUMMARY,
     DEFAULT_PARSE_LIMIT,
+    GIS2_SUPPORTED_REGIONS,
     KASPI_SUPPORTED_REGIONS,
     REGIONS,
     get_region_name,
@@ -246,7 +247,13 @@ class ParserBot:
 
         if mode != "query" or len(text) < 2:
             await update.message.reply_text(
-                "Нажмите /start, выберите источник, город и лимит, затем отправьте запрос."
+                "Выберите источник, город и лимит, затем отправьте запрос.",
+                reply_markup=InlineKeyboardMarkup(
+                    [
+                        [InlineKeyboardButton("🔍 Новый поиск", callback_data="new_search")],
+                        [InlineKeyboardButton("🏠 В меню", callback_data="back_main")],
+                    ]
+                ),
             )
             return
 
@@ -258,7 +265,13 @@ class ParserBot:
         if source in {"kaspi", "both"} and region not in KASPI_SUPPORTED_REGIONS:
             context.user_data["mode"] = None
             await update.message.reply_text(
-                "Для Kaspi выберите город Казахстана. Нажмите /start и выберите Алматы, Астану, Караганду, Актобе или Шымкент."
+                "Для Kaspi выберите город Казахстана. Выберите Алматы, Астану, Караганду, Актобе или Шымкент.",
+                reply_markup=InlineKeyboardMarkup(
+                    [
+                        [InlineKeyboardButton("🔍 Новый поиск", callback_data="new_search")],
+                        [InlineKeyboardButton("🏠 В меню", callback_data="back_main")],
+                    ]
+                ),
             )
             return
 
@@ -333,7 +346,15 @@ class ParserBot:
             )
         except Exception as e:
             logger.error("Parse error: %s", e, exc_info=True)
-            await status_message.edit_text(f"❌ Ошибка: {str(e)[:120]}")
+            await status_message.edit_text(
+                f"❌ Ошибка: {str(e)[:120]}",
+                reply_markup=InlineKeyboardMarkup(
+                    [
+                        [InlineKeyboardButton("🔍 Новый поиск", callback_data="new_search")],
+                        [InlineKeyboardButton("🏠 В меню", callback_data="back_main")],
+                    ]
+                ),
+            )
 
     async def show_results(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показать результаты последней сессии пользователя."""
@@ -344,12 +365,30 @@ class ParserBot:
         try:
             parse_session = self._get_user_session(db, user_id, context)
             if not parse_session:
-                await self._reply_or_edit(update, "📭 У вас пока нет завершённых сессий.")
+                await self._reply_or_edit(
+                    update,
+                    "📭 У вас пока нет завершённых сессий.",
+                    reply_markup=InlineKeyboardMarkup(
+                        [
+                            [InlineKeyboardButton("🔍 Новый поиск", callback_data="new_search")],
+                            [InlineKeyboardButton("🏠 В меню", callback_data="back_main")],
+                        ]
+                    ),
+                )
                 return
 
             companies = self.pm.get_session_results(db, parse_session.id, limit=10)
             if not companies:
-                await self._reply_or_edit(update, "📭 В последней сессии нет данных для показа.")
+                await self._reply_or_edit(
+                    update,
+                    "📭 В последней сессии нет данных для показа.",
+                    reply_markup=InlineKeyboardMarkup(
+                        [
+                            [InlineKeyboardButton("🔍 Новый поиск", callback_data="new_search")],
+                            [InlineKeyboardButton("🏠 В меню", callback_data="back_main")],
+                        ]
+                    ),
+                )
                 return
 
             lines = [
@@ -405,6 +444,7 @@ class ParserBot:
                         InlineKeyboardButton("📊 Excel", callback_data="export_xlsx"),
                     ],
                     [InlineKeyboardButton("◀️ К результатам", callback_data="view_results")],
+                    [InlineKeyboardButton("🔍 Новый поиск", callback_data="new_search")],
                 ]
             )
 
@@ -466,6 +506,7 @@ class ParserBot:
             keyboard = InlineKeyboardMarkup(
                 [
                     [InlineKeyboardButton("📊 К результатам", callback_data="view_results")],
+                    [InlineKeyboardButton("🔍 Новый поиск", callback_data="new_search")],
                     [InlineKeyboardButton("🏠 В меню", callback_data="back_main")],
                 ]
             )
@@ -580,7 +621,9 @@ class ParserBot:
         context.user_data["mode"] = None
 
     def _get_available_regions(self, source: str) -> list[tuple[str, str]]:
-        if source in {"kaspi", "both"}:
+        if source == "2gis":
+            region_keys = GIS2_SUPPORTED_REGIONS
+        elif source in {"kaspi", "both"}:
             region_keys = KASPI_SUPPORTED_REGIONS
         else:
             region_keys = tuple(REGIONS.keys())

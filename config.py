@@ -175,6 +175,11 @@ KASPI_SUPPORTED_REGIONS = tuple(
     for key in ("almaty", "nur_sultan", "karaganda", "aktobe", "shymkent")
     if key in REGIONS
 )
+GIS2_SUPPORTED_REGIONS = tuple(
+    key
+    for key in ("almaty", "nur_sultan", "karaganda", "aktobe", "shymkent")
+    if key in REGIONS
+)
 
 
 def require_telegram_token() -> str:

@@ -2,8 +2,10 @@ import unittest
 from unittest import mock
 
 from config import (
+    GIS2_SUPPORTED_REGIONS,
     build_database_url_from_pg_env,
     detect_database_url_source,
+    KASPI_SUPPORTED_REGIONS,
     normalize_database_url,
     resolve_database_url,
 )
@@ -88,6 +90,11 @@ class ConfigTestCase(unittest.TestCase):
                 detect_database_url_source("sqlite:///fallback.db"),
                 "PG_ENV",
             )
+
+    def test_supported_regions_are_kazakhstan_only(self):
+        self.assertEqual(GIS2_SUPPORTED_REGIONS, KASPI_SUPPORTED_REGIONS)
+        self.assertNotIn("moscow", GIS2_SUPPORTED_REGIONS)
+        self.assertNotIn("spb", GIS2_SUPPORTED_REGIONS)
 
 
 if __name__ == "__main__":
