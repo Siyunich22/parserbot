@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from urllib.parse import quote_plus
 
 try:
     from dotenv import load_dotenv
@@ -26,6 +27,43 @@ def normalize_database_url(database_url: str) -> str:
     return normalized
 
 
+def build_database_url_from_pg_env() -> str:
+    """Собрать PostgreSQL URL из Railway PG* переменных."""
+    host = os.getenv("PGHOST", "").strip()
+    port = os.getenv("PGPORT", "").strip()
+    user = os.getenv("PGUSER", "").strip()
+    password = os.getenv("PGPASSWORD", "").strip()
+    database = os.getenv("PGDATABASE", "").strip()
+
+    if not all((host, port, user, password, database)):
+        return ""
+
+    sslmode = (
+        os.getenv("PGSSLMODE", "").strip()
+        or os.getenv("DATABASE_SSLMODE", "").strip()
+        or "require"
+    )
+    query = f"?sslmode={quote_plus(sslmode)}" if sslmode else ""
+    return (
+        f"postgresql+psycopg://{quote_plus(user)}:{quote_plus(password)}"
+        f"@{host}:{port}/{quote_plus(database)}{query}"
+    )
+
+
+def resolve_database_url(default_sqlite_url: str) -> str:
+    """Выбрать рабочий URL БД из DATABASE_URL или PG* переменных Railway."""
+    raw_database_url = os.getenv("DATABASE_URL", "").strip()
+    normalized = normalize_database_url(raw_database_url)
+    if normalized and "://" in normalized:
+        return normalized
+
+    pg_database_url = build_database_url_from_pg_env()
+    if pg_database_url:
+        return pg_database_url
+
+    return normalize_database_url(default_sqlite_url)
+
+
 # Базовые настройки
 PROJECT_ROOT = Path(__file__).resolve().parent
 DATA_DIR = Path(os.getenv("DATA_DIR", str(PROJECT_ROOT / "data")))
@@ -39,9 +77,7 @@ EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 
 # База данных
-DATABASE_URL = normalize_database_url(
-    os.getenv("DATABASE_URL", f"sqlite:///{PROJECT_ROOT / 'parser_data.db'}")
-)
+DATABASE_URL = resolve_database_url(f"sqlite:///{PROJECT_ROOT / 'parser_data.db'}")
 
 # Логирование
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

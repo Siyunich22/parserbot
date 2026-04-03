@@ -59,7 +59,7 @@ class ParserKaspi:
 
             cache = get_search_cache()
             cache_city = city or "almaty"
-            cached = cache.get("kaspi", query, cache_city)
+            cached = cache.get("kaspi", query, cache_city, limit=limit)
             if cached:
                 logger.info("[CACHE HIT] Kaspi: %s results", len(cached))
                 return cached[:limit]
@@ -67,13 +67,13 @@ class ParserKaspi:
             real_results = self._search_real_kaspi(query, city, category, limit)
             if real_results:
                 logger.info("[REAL] Kaspi found %s results for '%s'", len(real_results), query)
-                cache.set("kaspi", query, cache_city, real_results)
+                cache.set("kaspi", query, cache_city, real_results, limit=limit)
                 return real_results[:limit]
 
             logger.warning("[KASPI] No live results for '%s' in %s", query, cache_city)
             if ENABLE_DEMO_FALLBACK:
                 demo_results = self._generate_demo_results(query, city, limit)
-                cache.set("kaspi", query, cache_city, demo_results)
+                cache.set("kaspi", query, cache_city, demo_results, limit=limit)
                 return demo_results
             return []
 

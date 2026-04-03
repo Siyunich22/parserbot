@@ -1,6 +1,7 @@
 import unittest
+from unittest import mock
 
-from config import normalize_database_url
+from config import build_database_url_from_pg_env, normalize_database_url, resolve_database_url
 
 
 class ConfigTestCase(unittest.TestCase):
@@ -27,6 +28,43 @@ class ConfigTestCase(unittest.TestCase):
             normalize_database_url("postgresql+psycopg://user:pass@host:5432/dbname"),
             "postgresql+psycopg://user:pass@host:5432/dbname",
         )
+
+    def test_build_database_url_from_pg_env(self):
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "PGHOST": "junction.proxy.rlwy.net",
+                "PGPORT": "5432",
+                "PGUSER": "postgres",
+                "PGPASSWORD": "secret",
+                "PGDATABASE": "railway",
+                "PGSSLMODE": "require",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                build_database_url_from_pg_env(),
+                "postgresql+psycopg://postgres:secret@junction.proxy.rlwy.net:5432/railway?sslmode=require",
+            )
+
+    def test_resolve_database_url_from_pg_env_when_database_url_is_invalid(self):
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "DATABASE_URL": "junction.proxy.rlwy.net",
+                "PGHOST": "junction.proxy.rlwy.net",
+                "PGPORT": "5432",
+                "PGUSER": "postgres",
+                "PGPASSWORD": "secret",
+                "PGDATABASE": "railway",
+                "PGSSLMODE": "require",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                resolve_database_url("sqlite:///fallback.db"),
+                "postgresql+psycopg://postgres:secret@junction.proxy.rlwy.net:5432/railway?sslmode=require",
+            )
 
 
 if __name__ == "__main__":

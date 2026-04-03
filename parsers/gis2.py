@@ -85,7 +85,7 @@ class Parser2GIS:
             logger.info("[2GIS] Searching: '%s' in city %s", query, city)
 
             cache = get_search_cache()
-            cached = cache.get("2gis", query, city)
+            cached = cache.get("2gis", query, city, limit=limit)
             if cached:
                 logger.info("[CACHE HIT] 2GIS: %s results", len(cached))
                 return cached[:limit]
@@ -93,13 +93,13 @@ class Parser2GIS:
             real_results = self._search_real_2gis(query, city, limit)
             if real_results:
                 logger.info("[REAL] 2GIS found %s results for '%s'", len(real_results), query)
-                cache.set("2gis", query, city, real_results)
+                cache.set("2gis", query, city, real_results, limit=limit)
                 return real_results[:limit]
 
             logger.warning("[2GIS] No live results for '%s' in %s", query, city)
             if ENABLE_DEMO_FALLBACK:
                 demo_results = self._generate_demo_results(query, city, limit)
-                cache.set("2gis", query, city, demo_results)
+                cache.set("2gis", query, city, demo_results, limit=limit)
                 return demo_results
             return []
 

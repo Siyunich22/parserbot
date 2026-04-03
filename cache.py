@@ -28,16 +28,17 @@ class SearchCache:
         os.makedirs(cache_dir, exist_ok=True)
         logger.info(f"Cache initialized: {cache_dir} (TTL: {ttl_hours}h)")
     
-    def _get_cache_key(self, source: str, query: str, city: str) -> str:
+    def _get_cache_key(self, source: str, query: str, city: str, limit: Optional[int] = None) -> str:
         """Генерируем ключ кэша"""
-        key_string = f"v{CACHE_SCHEMA_VERSION}:{source}:{query}:{city}".lower()
+        limit_suffix = str(limit) if limit is not None else "all"
+        key_string = f"v{CACHE_SCHEMA_VERSION}:{source}:{query}:{city}:{limit_suffix}".lower()
         return hashlib.md5(key_string.encode()).hexdigest()
     
     def _get_cache_path(self, key: str) -> str:
         """Получить путь файла кэша"""
         return os.path.join(self.cache_dir, f"{key}.json")
     
-    def get(self, source: str, query: str, city: str) -> Optional[List[Dict]]:
+    def get(self, source: str, query: str, city: str, limit: Optional[int] = None) -> Optional[List[Dict]]:
         """
         Получить результаты из кэша
         
@@ -50,17 +51,17 @@ class SearchCache:
             Результаты если кэш актуален, иначе None
         """
         try:
-            key = self._get_cache_key(source, query, city)
+            key = self._get_cache_key(source, query, city, limit)
             path = self._get_cache_path(key)
             
             if not os.path.exists(path):
-                logger.debug(f"Cache MISS: {source}/{query}/{city}")
+                logger.debug(f"Cache MISS: {source}/{query}/{city}/{limit or 'all'}")
                 return None
             
             # Проверяем TTL
             file_mtime = datetime.fromtimestamp(os.path.getmtime(path))
             if datetime.now() - file_mtime > self.ttl:
-                logger.info(f"Cache EXPIRED: {source}/{query}/{city}")
+                logger.info(f"Cache EXPIRED: {source}/{query}/{city}/{limit or 'all'}")
                 os.remove(path)
                 return None
             
@@ -68,14 +69,21 @@ class SearchCache:
             with open(path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
-            logger.info(f"Cache HIT: {source}/{query}/{city} ({len(data)} results)")
+            logger.info(f"Cache HIT: {source}/{query}/{city}/{limit or 'all'} ({len(data)} results)")
             return data
             
         except Exception as e:
             logger.error(f"Cache read error: {e}")
             return None
     
-    def set(self, source: str, query: str, city: str, results: List[Dict]) -> bool:
+    def set(
+        self,
+        source: str,
+        query: str,
+        city: str,
+        results: List[Dict],
+        limit: Optional[int] = None,
+    ) -> bool:
         """
         Сохранить результаты в кэш
         
@@ -89,14 +97,14 @@ class SearchCache:
             True если успешно, False иначе
         """
         try:
-            key = self._get_cache_key(source, query, city)
+            key = self._get_cache_key(source, query, city, limit)
             path = self._get_cache_path(key)
             
             # Сохраняем JSON
             with open(path, 'w', encoding='utf-8') as f:
                 json.dump(results, f, ensure_ascii=False, indent=2)
             
-            logger.info(f"Cache SET: {source}/{query}/{city} ({len(results)} results)")
+            logger.info(f"Cache SET: {source}/{query}/{city}/{limit or 'all'} ({len(results)} results)")
             return True
             
         except Exception as e:

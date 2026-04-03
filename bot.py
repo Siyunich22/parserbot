@@ -1,3 +1,4 @@
+import asyncio
 from html import escape
 from typing import Optional
 
@@ -249,26 +250,29 @@ class ParserBot:
             f"Источник: {self._format_source(source)}\n"
             f"Город: {region_name}\n"
             f"Лимит: {limit}"
+            + (
+                "\n\nℹ️ 2ГИС на холодном кэше может отвечать 20-40 секунд."
+                if source in {"2gis", "both"}
+                else ""
+            )
         )
-
-        db = SessionLocal()
         try:
-            parse_session = self.pm.parse(
-                db=db,
-                query=text,
-                source=source,
-                city=region,
-                user_id=user_id,
-                limit=limit,
+            parse_result = await asyncio.to_thread(
+                self._run_parse_job,
+                text,
+                source,
+                region,
+                user_id,
+                limit,
             )
 
-            if parse_session.status != "completed":
-                raise RuntimeError(parse_session.error_message or "Парсинг завершился с ошибкой")
+            if parse_result["status"] != "completed":
+                raise RuntimeError(parse_result["error_message"] or "Парсинг завершился с ошибкой")
 
             context.user_data.update(
                 {
                     "mode": None,
-                    "last_parse_session_id": parse_session.id,
+                    "last_parse_session_id": parse_result["session_id"],
                     "last_query": text,
                     "last_source": source,
                     "last_region": region,
@@ -293,7 +297,7 @@ class ParserBot:
                 f"Источник: {self._format_source(source)}\n"
                 f"Город: {region_name}\n"
                 f"Лимит: {limit}\n"
-                f"Найдено записей: <b>{parse_session.results_count}</b>",
+                f"Найдено записей: <b>{parse_result['results_count']}</b>",
                 reply_markup=keyboard,
                 parse_mode=ParseMode.HTML,
             )
@@ -301,14 +305,12 @@ class ParserBot:
             logger.info(
                 "Parse completed for user=%s: session_id=%s, results=%s",
                 user_id,
-                parse_session.id,
-                parse_session.results_count,
+                parse_result["session_id"],
+                parse_result["results_count"],
             )
         except Exception as e:
             logger.error("Parse error: %s", e, exc_info=True)
             await status_message.edit_text(f"❌ Ошибка: {str(e)[:120]}")
-        finally:
-            db.close()
 
     async def show_results(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показать результаты последней сессии пользователя."""
@@ -512,6 +514,34 @@ class ParserBot:
                 [InlineKeyboardButton("ℹ️ Справка", callback_data="help")],
             ]
         )
+
+    def _run_parse_job(
+        self,
+        query: str,
+        source: str,
+        region: str,
+        user_id: int,
+        limit: int,
+    ) -> dict:
+        """Выполнить синхронный парсинг вне event loop."""
+        db = SessionLocal()
+        try:
+            parse_session = self.pm.parse(
+                db=db,
+                query=query,
+                source=source,
+                city=region,
+                user_id=user_id,
+                limit=limit,
+            )
+            return {
+                "session_id": parse_session.id,
+                "status": parse_session.status,
+                "error_message": parse_session.error_message,
+                "results_count": parse_session.results_count,
+            }
+        finally:
+            db.close()
 
     def _get_selected_limit(self, context: ContextTypes.DEFAULT_TYPE) -> int:
         value = context.user_data.get("limit", DEFAULT_PARSE_LIMIT)
